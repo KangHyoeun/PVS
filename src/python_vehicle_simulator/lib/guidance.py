@@ -33,3 +33,24 @@ def refModel3(x_d, v_d, a_d, r, wn_d, zeta_d, v_max, sampleTime):
         v_d = -v_max    
     
     return x_d, v_d, a_d
+
+
+# [v_d, a_d] = refModel2(v_d, a_d, r, wn_d, zeta_d, v_max, sampleTime) is a 2nd-order
+# reference model for generation of smooth desired velocity v_d and acceleration a_d.
+# Inputs are natural frequency wn_d and relative damping zeta_d.
+def refModel2(v_d, a_d, r, wn_d, zeta_d, v_max, sampleTime):
+    
+    # desired acceleration (2nd order dynamics)
+    a_d_dot = wn_d**2 * (r - v_d) - 2*zeta_d * wn_d * a_d
+
+    # Forward Euler integration
+    v_d += sampleTime * a_d             # desired velocity
+    a_d += sampleTime * a_d_dot         # desired acceleration
+    
+    # Velocity saturation
+    if (v_d > v_max):
+        v_d = v_max
+    elif (v_d < -v_max): 
+        v_d = -v_max    
+    
+    return v_d, a_d

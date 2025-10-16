@@ -11,7 +11,7 @@ Author:     Thor I. Fossen
 """
 
 import numpy as np
-from python_vehicle_simulator.lib.guidance import refModel3
+from python_vehicle_simulator.lib.guidance import refModel3, refModel2
 from python_vehicle_simulator.lib.gnc import ssa, Rzyx
 
 # SISO PID pole placement
@@ -128,5 +128,91 @@ def integralSMC(
     return delta, e_int, x_d, v_d, a_d
 
 
-
+# Velocity controller with 2nd-order reference model and pole placement
+def VelocityPolePlacement(
+    u,
+    r,
+    u_d,
+    u_dot_d,
+    r_d,
+    r_dot_d,
+    m_u,
+    d_u,
+    m_r,
+    d_r,
+    wn_d_u,
+    zeta_d_u,
+    wn_d_r,
+    zeta_d_r,
+    wn_u,
+    zeta_u,
+    wn_r,
+    zeta_r,
+    u_ref,
+    r_ref,
+    u_max,
+    r_max,
+    sampleTime,
+):
+    """
+    Velocity controller for surge (u) and yaw rate (r) using pole placement.
+    
+    Control law (Feedforward + P feedback):
+        tau_X = m_u * u_dot_d + d_u * u_d - Kp_u * (u - u_d)
+        tau_N = m_r * r_dot_d + d_r * r_d - Kp_r * (r - r_d)
+    
+    Note: Derivative term is removed for simplicity and robustness.
+    The system's natural damping (d_u, d_r) provides sufficient damping.
+    
+    Inputs:
+        u, r: current surge velocity and yaw rate
+        u_d, u_dot_d: desired surge velocity and acceleration states
+        r_d, r_dot_d: desired yaw rate and angular acceleration states
+        m_u, d_u: surge mass and damping
+        m_r, d_r: yaw inertia and damping
+        wn_d_u, zeta_d_u: reference model parameters for surge
+        wn_d_r, zeta_d_r: reference model parameters for yaw rate
+        wn_u, zeta_u: controller parameters for surge (pole placement)
+        wn_r, zeta_r: controller parameters for yaw rate (pole placement)
+        u_ref, r_ref: velocity references (setpoints)
+        u_max, r_max: velocity saturation limits
+        sampleTime: sampling time
+    
+    Returns:
+        tau_X: surge force
+        tau_N: yaw moment
+        u_d, u_dot_d: updated desired surge velocity and acceleration
+        r_d, r_dot_d: updated desired yaw rate and angular acceleration
+    """
+    
+    # 2nd-order reference model for surge velocity
+    [u_d, u_dot_d] = refModel2(u_d, u_dot_d, u_ref, wn_d_u, zeta_d_u, u_max, sampleTime)
+    
+    # 2nd-order reference model for yaw rate
+    [r_d, r_dot_d] = refModel2(r_d, r_dot_d, r_ref, wn_d_r, zeta_d_r, r_max, sampleTime)
+    
+    # Tracking errors
+    e_u = u - u_d
+    e_r = r - r_d
+    
+    # P gains based on pole placement
+    # For first-order system with P control:
+    # Closed-loop: s + (d + Kp)/m = 0
+    # Desired pole: s = -wn
+    # Therefore: Kp = m*wn - d
+    
+    # Surge controller
+    Kp_u = m_u * wn_u - d_u
+    
+    # Yaw rate controller
+    Kp_r = m_r * wn_r - d_r
+    
+    # Control law: Feedforward (with nonlinear damping compensation) + P feedback
+    # Nonlinear yaw damping compensation (from otter.py line 320-321)
+    tau_N_nonlinear = 10.0 * d_r * r_d * abs(r_d)
+    
+    tau_X = m_u * u_dot_d + d_u * u_d - Kp_u * e_u
+    tau_N = m_r * r_dot_d + d_r * r_d + tau_N_nonlinear - Kp_r * e_r
+    
+    return tau_X, tau_N, u_d, u_dot_d, r_d, r_dot_d
 

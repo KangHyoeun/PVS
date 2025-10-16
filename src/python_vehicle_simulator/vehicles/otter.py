@@ -41,7 +41,7 @@ Author:     Thor I. Fossen
 """
 import numpy as np
 import math
-from python_vehicle_simulator.lib.control import PIDpolePlacement
+from python_vehicle_simulator.lib.control import PIDpolePlacement, VelocityPolePlacement
 from python_vehicle_simulator.lib.gnc import Smtrx, Hmtrx, Rzyx, m2c, crossFlowDrag, sat
 
 # Class Vehicle
@@ -76,6 +76,12 @@ class otter:
                 "Heading autopilot, psi_d = "
                 + str(r)
                 + " deg"
+                )
+        elif controlSystem == "velocityControl":
+            self.controlDescription = (
+                "Velocity control, u_ref = "
+                + str(r)
+                + " m/s, r_ref input"
                 )
         else:
             self.controlDescription = "Step inputs for n1 and n2"
@@ -212,13 +218,29 @@ class otter:
         self.wn = 2.5   # PID pole placement
         self.zeta = 1
 
-        # Reference model
+        # Reference model (heading autopilot)
         self.r_max = 10 * math.pi / 180  # maximum yaw rate
         self.psi_d = 0   # angle, angular rate and angular acc. states
-        self.r_d = 0
+        self.r_d_heading = 0
         self.a_d = 0
         self.wn_d = 0.5  # desired natural frequency in yaw
         self.zeta_d = 1  # desired relative damping ratio
+        
+        # Velocity controller states
+        self.u_d = 0.0     # desired surge velocity
+        self.u_dot_d = 0.0 # desired surge acceleration
+        self.r_d = 0.0     # desired yaw rate
+        self.r_dot_d = 0.0 # desired yaw angular acceleration
+        
+        # Velocity controller parameters
+        self.wn_d_u = 0.6   # reference model natural frequency for surge
+        self.zeta_d_u = 1.0 # reference model damping for surge
+        self.wn_d_r = 0.6   # reference model natural frequency for yaw rate
+        self.zeta_d_r = 1.0 # reference model damping for yaw rate
+        self.wn_u = 2.5     # controller bandwidth for surge (pole placement)
+        self.wn_r = 2.5     # controller bandwidth for yaw rate (pole placement)
+        self.u_max = 3.0    # maximum surge velocity (m/s)
+        self.r_max_vel = 15 * math.pi / 180  # maximum yaw rate for velocity control (rad/s) ~physical limit
 
 
     def dynamics(self, eta, nu, u_actual, u_control, sampleTime):
@@ -338,7 +360,7 @@ class otter:
         psi = eta[5]  # yaw angle
         r = nu[5]  # yaw rate
         e_psi = psi - self.psi_d  # yaw angle tracking error
-        e_r = r - self.r_d  # yaw rate tracking error
+        e_r = r - self.r_d_heading  # yaw rate tracking error
         psi_ref = self.ref * math.pi / 180  # yaw angle setpoint
 
         wn = self.wn  # PID natural frequency
@@ -355,12 +377,12 @@ class otter:
         # PID feedback controller with 3rd-order reference model
         tau_X = self.tauX
 
-        [tau_N, self.e_int, self.psi_d, self.r_d, self.a_d] = PIDpolePlacement(
+        [tau_N, self.e_int, self.psi_d, self.r_d_heading, self.a_d] = PIDpolePlacement(
             self.e_int,
             e_psi,
             e_r,
             self.psi_d,
-            self.r_d,
+            self.r_d_heading,
             self.a_d,
             m,
             d,
@@ -396,4 +418,70 @@ class otter:
 
         u_control = np.array([n1, n2], float)
 
+        return u_control
+
+
+    def velocityControl(self, nu, u_ref, r_ref, sampleTime):
+        """
+        u = velocityControl(nu, u_ref, r_ref, sampleTime) is a velocity controller
+        for surge (u) and yaw rate (r) using pole placement with 2nd-order reference model.
+        
+        Control law (Feedforward + P feedback):
+            tau_X = m_u * u_dot_d + d_u * u_d - Kp_u * (u - u_d)
+            tau_N = m_r * r_dot_d + d_r * r_d - Kp_r * (r - r_d)
+        
+        Where Kp gains are computed via pole placement:
+            Kp_u = m_u * wn_u - d_u
+            Kp_r = m_r * wn_r - d_r
+        
+        Inputs:
+            nu: velocity vector [u, v, w, p, q, r]
+            u_ref: desired surge velocity setpoint (m/s)
+            r_ref: desired yaw rate setpoint (rad/s)
+            sampleTime: sampling time (s)
+        
+        Returns:
+            u_control: propeller commands [n1, n2]
+        """
+        
+        u = nu[0]  # current surge velocity
+        r = nu[5]  # current yaw rate
+        
+        # System parameters
+        m_u = self.M[0, 0]  # surge mass (including added mass)
+        d_u = self.D[0, 0]  # surge damping (positive)
+        m_r = self.M[5, 5]  # yaw inertia (including added mass)
+        d_r = self.D[5, 5]  # yaw damping (positive)
+        
+        # Call velocity controller (Feedforward + P control)
+        [tau_X, tau_N, self.u_d, self.u_dot_d, self.r_d, self.r_dot_d] = VelocityPolePlacement(
+            u,
+            r,
+            self.u_d,
+            self.u_dot_d,
+            self.r_d,
+            self.r_dot_d,
+            m_u,
+            d_u,
+            m_r,
+            d_r,
+            self.wn_d_u,
+            self.zeta_d_u,
+            self.wn_d_r,
+            self.zeta_d_r,
+            self.wn_u,
+            1.0,  # zeta_u (not used in P controller, kept for compatibility)
+            self.wn_r,
+            1.0,  # zeta_r (not used in P controller, kept for compatibility)
+            u_ref,
+            r_ref,
+            self.u_max,
+            self.r_max_vel,
+            sampleTime,
+        )
+        
+        # Control allocation
+        [n1, n2] = self.controlAllocation(tau_X, tau_N)
+        u_control = np.array([n1, n2], float)
+        
         return u_control
