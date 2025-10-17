@@ -136,6 +136,8 @@ def VelocityPolePlacement(
     u_dot_d,
     r_d,
     r_dot_d,
+    u_int,
+    r_int,
     m_u,
     d_u,
     m_r,
@@ -157,17 +159,18 @@ def VelocityPolePlacement(
     """
     Velocity controller for surge (u) and yaw rate (r) using pole placement.
     
-    Control law (Feedforward + P feedback):
-        tau_X = m_u * u_dot_d + d_u * u_d - Kp_u * (u - u_d)
-        tau_N = m_r * r_dot_d + d_r * r_d - Kp_r * (r - r_d)
+    Control law (Feedforward + PI feedback):
+        tau_X = m_u * u_dot_d + d_u * u_d - Kp_u * (u - u_d) - Ki_u * integral(u - u_d)
+        tau_N = m_r * r_dot_d + d_r * r_d - Kp_r * (r - r_d) - Ki_r * integral(r - r_d)
     
-    Note: Derivative term is removed for simplicity and robustness.
+    Note: Integral term automatically compensates for nonlinear damping and model uncertainties.
     The system's natural damping (d_u, d_r) provides sufficient damping.
     
     Inputs:
         u, r: current surge velocity and yaw rate
         u_d, u_dot_d: desired surge velocity and acceleration states
         r_d, r_dot_d: desired yaw rate and angular acceleration states
+        u_int, r_int: integral error states
         m_u, d_u: surge mass and damping
         m_r, d_r: yaw inertia and damping
         wn_d_u, zeta_d_u: reference model parameters for surge
@@ -183,6 +186,7 @@ def VelocityPolePlacement(
         tau_N: yaw moment
         u_d, u_dot_d: updated desired surge velocity and acceleration
         r_d, r_dot_d: updated desired yaw rate and angular acceleration
+        u_int, r_int: updated integral states
     """
     
     # 2nd-order reference model for surge velocity
@@ -195,24 +199,31 @@ def VelocityPolePlacement(
     e_u = u - u_d
     e_r = r - r_d
     
-    # P gains based on pole placement
-    # For first-order system with P control:
-    # Closed-loop: s + (d + Kp)/m = 0
-    # Desired pole: s = -wn
-    # Therefore: Kp = m*wn - d
+    # Integral states (with anti-windup)
+    u_int += sampleTime * e_u
+    r_int += sampleTime * e_r
+    
+    # Anti-windup saturation
+    u_int_max = 100.0  # reasonable limit
+    r_int_max = 50.0
+    u_int = max(min(u_int, u_int_max), -u_int_max)
+    r_int = max(min(r_int, r_int_max), -r_int_max)
+    
+    # PI gains based on pole placement
+    # For first-order system with PI control:
+    # Desired poles: s = -wn (proportional) and s = -wn/5 (integral)
     
     # Surge controller
     Kp_u = m_u * wn_u - d_u
+    Ki_u = Kp_u * wn_u / 5.0  # integral gain
     
-    # Yaw rate controller
+    # Yaw rate controller  
     Kp_r = m_r * wn_r - d_r
+    Ki_r = Kp_r * wn_r / 5.0  # integral gain
     
-    # Control law: Feedforward (with nonlinear damping compensation) + P feedback
-    # Nonlinear yaw damping compensation (from otter.py line 320-321)
-    tau_N_nonlinear = 10.0 * d_r * r_d * abs(r_d)
+    # Control law: Feedforward + PI feedback
+    tau_X = m_u * u_dot_d + d_u * u_d - Kp_u * e_u - Ki_u * u_int
+    tau_N = m_r * r_dot_d + d_r * r_d - Kp_r * e_r - Ki_r * r_int
     
-    tau_X = m_u * u_dot_d + d_u * u_d - Kp_u * e_u
-    tau_N = m_r * r_dot_d + d_r * r_d + tau_N_nonlinear - Kp_r * e_r
-    
-    return tau_X, tau_N, u_d, u_dot_d, r_d, r_dot_d
+    return tau_X, tau_N, u_d, u_dot_d, r_d, r_dot_d, u_int, r_int
 

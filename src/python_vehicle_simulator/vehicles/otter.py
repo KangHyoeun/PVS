@@ -231,6 +231,8 @@ class otter:
         self.u_dot_d = 0.0 # desired surge acceleration
         self.r_d = 0.0     # desired yaw rate
         self.r_dot_d = 0.0 # desired yaw angular acceleration
+        self.u_int = 0.0   # surge velocity integral error
+        self.r_int = 0.0   # yaw rate integral error
         
         # Velocity controller parameters
         self.wn_d_u = 0.6   # reference model natural frequency for surge
@@ -426,13 +428,20 @@ class otter:
         u = velocityControl(nu, u_ref, r_ref, sampleTime) is a velocity controller
         for surge (u) and yaw rate (r) using pole placement with 2nd-order reference model.
         
-        Control law (Feedforward + P feedback):
-            tau_X = m_u * u_dot_d + d_u * u_d - Kp_u * (u - u_d)
-            tau_N = m_r * r_dot_d + d_r * r_d - Kp_r * (r - r_d)
+        Control law (Feedforward + PI feedback):
+            tau_X = m_u * u_dot_d + d_u * u_d - Kp_u * (u - u_d) - Ki_u * integral(u - u_d)
+            tau_N = m_r * r_dot_d + d_r * r_d - Kp_r * (r - r_d) - Ki_r * integral(r - r_d)
         
-        Where Kp gains are computed via pole placement:
+        Where gains are computed via pole placement:
             Kp_u = m_u * wn_u - d_u
+            Ki_u = Kp_u * wn_u / 5
             Kp_r = m_r * wn_r - d_r
+            Ki_r = Kp_r * wn_r / 5
+        
+        The integral term automatically compensates for:
+        - Nonlinear damping (e.g., quadratic drag)
+        - Model uncertainties
+        - Constant disturbances
         
         Inputs:
             nu: velocity vector [u, v, w, p, q, r]
@@ -453,14 +462,16 @@ class otter:
         m_r = self.M[5, 5]  # yaw inertia (including added mass)
         d_r = self.D[5, 5]  # yaw damping (positive)
         
-        # Call velocity controller (Feedforward + P control)
-        [tau_X, tau_N, self.u_d, self.u_dot_d, self.r_d, self.r_dot_d] = VelocityPolePlacement(
+        # Call velocity controller (Feedforward + PI control)
+        [tau_X, tau_N, self.u_d, self.u_dot_d, self.r_d, self.r_dot_d, self.u_int, self.r_int] = VelocityPolePlacement(
             u,
             r,
             self.u_d,
             self.u_dot_d,
             self.r_d,
             self.r_dot_d,
+            self.u_int,
+            self.r_int,
             m_u,
             d_u,
             m_r,
@@ -470,9 +481,9 @@ class otter:
             self.wn_d_r,
             self.zeta_d_r,
             self.wn_u,
-            1.0,  # zeta_u (not used in P controller, kept for compatibility)
+            1.0,  # zeta_u (not used in PI controller, kept for compatibility)
             self.wn_r,
-            1.0,  # zeta_r (not used in P controller, kept for compatibility)
+            1.0,  # zeta_r (not used in PI controller, kept for compatibility)
             u_ref,
             r_ref,
             self.u_max,
